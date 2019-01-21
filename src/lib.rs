@@ -79,7 +79,7 @@ use std::iter::IntoIterator;
 
 // Third party
 use serde::de::value::{MapDeserializer, SeqDeserializer};
-use serde::de::{self, IntoDeserializer};
+use serde::de::{self, Error as SerdeError, IntoDeserializer, Unexpected};
 
 // Ours
 mod error;
@@ -158,8 +158,24 @@ impl<'de, 'a> de::Deserializer<'de> for Val {
         visitor.visit_some(self)
     }
 
+    fn deserialize_bool<V>(
+        self,
+        visitor: V,
+    ) -> Result<V::Value>
+    where
+        V: de::Visitor<'de>,
+    {
+        let s = self.0.as_str();
+        match s {
+            "0" => visitor.visit_bool(false),
+            "1" => visitor.visit_bool(true),
+            "false" => visitor.visit_bool(false),
+            "true" => visitor.visit_bool(true),
+            _ => Err(Error::invalid_value(Unexpected::Str(s), &visitor)),
+        }
+    }
+
     forward_parsed_values! {
-        bool => deserialize_bool,
         u8 => deserialize_u8,
         u16 => deserialize_u16,
         u32 => deserialize_u32,
@@ -351,6 +367,14 @@ mod tests {
         provided: Option<String>,
     }
 
+    #[derive(Deserialize, Debug, PartialEq)]
+    struct Bar {
+        foo: bool,
+        bar: bool,
+        baz: bool,
+        quux: bool,
+    }
+
     #[test]
     fn deserialize_from_iter() {
         let data = vec![
@@ -379,6 +403,26 @@ mod tests {
     }
 
     #[test]
+    fn deserialize_bool() {
+        let data = vec![
+            (String::from("FOO"), String::from("true")),
+            (String::from("BAR"), String::from("false")),
+            (String::from("BAZ"), String::from("1")),
+            (String::from("QUUX"), String::from("0")),
+        ];
+
+        assert_eq!(
+            from_iter::<_, Bar>(data).unwrap(),
+            Bar {
+                foo: true,
+                bar: false,
+                baz: true,
+                quux: false,
+            }
+        );
+    }
+
+    #[test]
     fn fails_with_missing_value() {
         let data = vec![
             (String::from("BAR"), String::from("test")),
@@ -401,7 +445,9 @@ mod tests {
             Ok(_) => panic!("expected failure"),
             Err(e) => assert_eq!(
                 e,
-                Error::Custom(String::from("provided string was not `true` or `false`"))
+                Error::Custom(String::from(
+                    "invalid value: string \"notabool\", expected a boolean"
+                ))
             ),
         }
     }
